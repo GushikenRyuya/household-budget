@@ -156,7 +156,7 @@ const CATEGORIES = [
 const METHODS = [
   { n:"ひなた現金", who:"ひなた" },
   { n:"ぐしけん現金", who:"ぐしけん" },
-  { n:"共有現金", who:"共有" },
+  { n:"共有現金", who:"共有", hidden:true },   // 入力ボタンには出さない(過去の記録の表示用に残す)
   { n:"ひなた個人カード", who:"ひなた" },
   { n:"ぐしけん個人カード", who:"ぐしけん" },
   { n:"ひなたコード決済", who:"ひなた" },
@@ -275,7 +275,7 @@ function buildForm(init){
   category.value = init.category || "";
 
   let method = init.method || "";
-  const opts = METHODS.map(m => m.n);
+  const opts = METHODS.filter(m => !m.hidden).map(m => m.n);
   if (method && !opts.includes(method)) opts.push(method);
   const chips = opts.map(n => {
     const b = el("button", {type:"button", class:"chip"}, methodLabel(n));
@@ -364,12 +364,11 @@ function whoCard(list, total){
 
 // ================= 画面: 入力 =================
 const views = { input: $("v-input"), month: $("v-month"), year: $("v-year") };
-// 支払方法: 何も選んでいなければ「共有現金」。選んだものは次回以降の初期値として優先される
-const DEFAULT_METHOD = "共有現金";
+// 支払方法: 選んだものは次回以降の初期値として優先される(最初は未選択)
 const savedMethod = (() => { try{ return localStorage.getItem("budget-last-method") || ""; }catch{ return ""; } })();
 const form = buildForm({
   date: todayStr(),
-  method: METHODS.some(m => m.n === savedMethod) ? savedMethod : DEFAULT_METHOD,
+  method: METHODS.some(m => !m.hidden && m.n === savedMethod) ? savedMethod : "",
   onMethod: n => { try{ localStorage.setItem("budget-last-method", n); }catch{} }
 });
 const monthTotalSlot = el("div", {});
