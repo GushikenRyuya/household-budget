@@ -85,6 +85,8 @@ button.brow{display:block; width:100%; text-align:left; background:none; border:
 .day{display:flex; justify-content:space-between; font-size:.85rem; color:var(--sub); margin:14px 0 4px}
 .entry{display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%; text-align:left;
   background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:6px; min-height:56px}
+.e-ico{font-size:1.6rem; width:38px; text-align:center; flex:none; line-height:1}
+.e-main{flex:1; min-width:0}
 .e-cat{font-weight:700}
 .e-sub{font-size:.8rem; color:var(--sub)}
 .e-amt{font-weight:700; white-space:nowrap}
@@ -162,6 +164,19 @@ const METHODS = [
 ];
 const WHO = ["ひなた", "ぐしけん", "共有"];
 const whoOf = m => (METHODS.find(x => x.n === m) || {}).who || "その他";
+
+// 保存されるのは名前だけ。アイコンは表示のときに付けます(あとから変えても過去の記録は影響なし)
+const CAT_ICON = {
+  "家賃":"🏠","光熱費":"💡","食費":"🍚","あおなぎ習い事費":"📚","学童費":"🎒","学校費":"🏫","医療費":"🏥","服代":"👕",
+  "娯楽費":"🎮","外食費":"🍽️","行事費":"🎉","お祝い金":"🎁","お泊り代":"🏨","携帯代":"📱","保険代":"🛡️","カード払い":"💳",
+  "車ローン":"🚗","奨学金":"🎓","借金返金代":"💸","飛向習い事費":"✏️","美容費":"💄","理髪代":"💇","貯金":"🐷",
+  "予想外の出費":"⚠️","ATM手数料":"🏧","ガソリン代":"⛽","消耗品代金":"🧻","サブスク":"📺","その他":"📦"
+};
+const WHO_ICON = { "ひなた":"🤯", "ぐしけん":"🤓", "共有":"🤝" };
+const catIcon = c => CAT_ICON[c] || "🏷️";
+const catLabel = c => `${catIcon(c)} ${c}`;
+const whoLabel = w => WHO_ICON[w] ? `${WHO_ICON[w]} ${w}` : w;
+const methodLabel = n => { const ic = WHO_ICON[whoOf(n)]; return ic ? `${ic} ${n}` : n; };
 
 // ================= 共通ヘルパー =================
 const $ = id => document.getElementById(id);
@@ -256,15 +271,15 @@ function buildForm(init){
   const cats = [...CATEGORIES];
   if (init.category && !cats.includes(init.category)) cats.push(init.category);
   category.append(el("option", {value:""}, "選択してください"));
-  for (const c of cats) category.append(el("option", {value:c}, c));
+  for (const c of cats) category.append(el("option", {value:c}, catLabel(c)));
   category.value = init.category || "";
 
   let method = init.method || "";
   const opts = METHODS.map(m => m.n);
   if (method && !opts.includes(method)) opts.push(method);
   const chips = opts.map(n => {
-    const b = el("button", {type:"button", class:"chip"}, n);
-    b.addEventListener("click", () => { method = n; sync(); });
+    const b = el("button", {type:"button", class:"chip"}, methodLabel(n));
+    b.addEventListener("click", () => { method = n; sync(); if (init.onMethod) init.onMethod(n); });
     return b;
   });
   function sync(){ chips.forEach((b, i) => { const on = opts[i] === method; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }); }
@@ -316,7 +331,8 @@ function openSheet(entry){
 // ================= 部品 =================
 function entryRow(e, showDate){
   return el("button", {type:"button", class:"entry", onclick: () => openSheet(e)},
-    el("div", {}, el("div", {class:"e-cat"}, e.category), el("div", {class:"e-sub"}, (showDate ? fmtDay(e.date) + " ・ " : "") + e.method)),
+    el("div", {class:"e-ico", "aria-hidden":"true"}, catIcon(e.category)),
+    el("div", {class:"e-main"}, el("div", {class:"e-cat"}, e.category), el("div", {class:"e-sub"}, (showDate ? fmtDay(e.date) + " ・ " : "") + methodLabel(e.method))),
     el("div", {class:"e-amt"}, yen(e.amount)));
 }
 function barRow(label, value, total, tag = "div", onclick){
@@ -327,9 +343,9 @@ function barRow(label, value, total, tag = "div", onclick){
     el("div", {class:"brow-top"}, el("span", {}, label), el("span", {class:"brow-val"}, `${yen(value)}${tag === "div" ? ` (${pct}%)` : ""}`)),
     el("div", {class:"bar"}, el("i", {style:`width:${w}%`})));
 }
-function breakdownCard(title, rows, total){
+function breakdownCard(title, rows, total, labelFn = x => x){
   if (!rows.length) return null;
-  return el("div", {class:"card"}, el("h2", {}, title), ...rows.map(([k, v]) => barRow(k, v, total)));
+  return el("div", {class:"card"}, el("h2", {}, title), ...rows.map(([k, v]) => barRow(labelFn(k), v, total)));
 }
 function nav(label, onPrev, onNext){
   return el("div", {class:"nav"},
@@ -343,12 +359,19 @@ function totalCard(label, value){
 function whoCard(list, total){
   const m = new Map(WHO.map(w => [w, 0]));
   for (const e of list){ const w = whoOf(e.method); m.set(w, (m.get(w) || 0) + e.amount); }
-  return el("div", {class:"card"}, el("h2", {}, "支払い者別"), ...[...m.entries()].map(([k, v]) => barRow(k, v, total)));
+  return el("div", {class:"card"}, el("h2", {}, "支払い者別"), ...[...m.entries()].map(([k, v]) => barRow(whoLabel(k), v, total)));
 }
 
 // ================= 画面: 入力 =================
 const views = { input: $("v-input"), month: $("v-month"), year: $("v-year") };
-const form = buildForm({ date: todayStr(), method: (() => { try{ return localStorage.getItem("budget-last-method") || ""; }catch{ return ""; } })() });
+// 支払方法: 何も選んでいなければ「共有現金」。選んだものは次回以降の初期値として優先される
+const DEFAULT_METHOD = "共有現金";
+const savedMethod = (() => { try{ return localStorage.getItem("budget-last-method") || ""; }catch{ return ""; } })();
+const form = buildForm({
+  date: todayStr(),
+  method: METHODS.some(m => m.n === savedMethod) ? savedMethod : DEFAULT_METHOD,
+  onMethod: n => { try{ localStorage.setItem("budget-last-method", n); }catch{} }
+});
 const monthTotalSlot = el("div", {});
 const recentSlot = el("div", {});
 const addBtn = el("button", {type:"button", class:"btn primary block", onclick: () => {
@@ -401,8 +424,8 @@ function renderMonth(){
     kids.push(el("div", {class:"empty"}, "この月の記録はまだありません"));
   }else{
     kids.push(whoCard(list, total));
-    kids.push(breakdownCard("カテゴリー別", sumBy(list, e => e.category), total));
-    kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total));
+    kids.push(breakdownCard("カテゴリー別", sumBy(list, e => e.category), total, catLabel));
+    kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total, methodLabel));
     kids.push(el("h2", {}, "明細"));
     const sorted = [...list].sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
     let cur = "";
@@ -434,8 +457,8 @@ function renderYear(){
     kids.push(el("div", {class:"card"}, el("h2", {}, "月ごとの推移(タップで月別へ)"),
       ...byMonth.map((val, i) => barRow(`${i + 1}月`, val, max, "button", () => { setPeriod(state.year, i + 1); setTab("month"); }))));
     kids.push(whoCard(list, total));
-    kids.push(breakdownCard("カテゴリー別", sumBy(list, e => e.category), total));
-    kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total));
+    kids.push(breakdownCard("カテゴリー別", sumBy(list, e => e.category), total, catLabel));
+    kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total, methodLabel));
   }
   v.replaceChildren(...kids.filter(Boolean));
 }
