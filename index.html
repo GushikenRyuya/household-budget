@@ -18,12 +18,12 @@
 <style>
 :root{
   --bg:#efe8fc; --grid:rgba(124,98,196,.10); --surface:#fbf9ff; --ink:#34285a; --sub:#7a6ca3; --line:#6f5aa8;
-  --accent:#b79cf0; --accent-ink:#2b1f52; --accent-soft:#e4dafa; --danger:#c0407a; --shadow:#b9a6ea;
+  --accent:#b79cf0; --accent-ink:#2b1f52; --accent-soft:#e4dafa; --danger:#c0407a; --shadow:#b9a6ea; --pos:#23867a;
 }
 @media (prefers-color-scheme: dark){
   :root{
     --bg:#241b3f; --grid:rgba(183,156,240,.08); --surface:#2f2552; --ink:#f1eaff; --sub:#b7a9de; --line:#9b86d8;
-    --accent:#b79cf0; --accent-ink:#241b3f; --accent-soft:#40336b; --danger:#ff8fb8; --shadow:#150e29;
+    --accent:#b79cf0; --accent-ink:#241b3f; --accent-soft:#40336b; --danger:#ff8fb8; --shadow:#150e29; --pos:#7be0c3;
   }
 }
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
@@ -110,6 +110,14 @@ button.brow{display:block; width:100%; text-align:left; background:none; border:
 .e-sub{font-size:.8rem; color:var(--sub)}
 .e-amt{white-space:nowrap; font-size:1.05rem}
 .empty{color:var(--sub); text-align:center; padding:28px 8px}
+.pos{color:var(--pos)}
+.neg{color:var(--danger)}
+.subh{font-size:.85rem; color:var(--sub); margin:14px 0 10px; padding-top:10px; border-top:3px dotted var(--line)}
+button.balrow{display:flex; justify-content:space-between; align-items:center; gap:10px; width:100%; text-align:left;
+  background:none; border:none; border-bottom:3px dotted var(--line); padding:8px 0; margin:0}
+button.balrow:last-child{border-bottom:none}
+.balrow .sub{font-size:.75rem; color:var(--sub)}
+.balrow .v{font-size:1.05rem; white-space:nowrap}
 
 #tabs{position:fixed; left:0; right:0; bottom:0; z-index:10; background:var(--surface); border-top:3px solid var(--line);
   display:grid; grid-template-columns:repeat(3,1fr); padding-bottom:env(safe-area-inset-bottom)}
@@ -187,6 +195,9 @@ const METHODS = [
 ];
 const FALLBACK_METHOD = "共有現金";
 const WHO = ["ひなた", "ぐしけん", "共有"];
+const PEOPLE = ["ひなた", "ぐしけん"];
+const INCOME_CATS = ["給与", "単発バイト"];
+const isIncome = e => e.type === "income";   // type がない古い記録は支出
 const whoOf = m => {
   const f = METHODS.find(x => x.n === m);
   if (f) return f.who;
@@ -203,7 +214,7 @@ const CAT_ICON = {
   "家賃＆水道":"🏠","光熱費":"💡","食費":"🍚","習い事":"📚","学童":"🎒","学校":"🏫","医療費":"🏥","衣服":"👕",
   "娯楽費":"🎮","外食":"🍽️","お祝い金":"🎁","お泊り代":"🏨","理髪":"💇","消耗品":"🧻","その他":"📦",
   "携帯":"📱","保険":"🛡️","カード":"💳","車ローン":"🚗","奨学金":"🎓","借金返済":"💸","美容":"💄","貯金":"🐷",
-  "ATM手数料":"🏧","ガソリン":"⛽","サブスク":"📺",
+  "ATM手数料":"🏧","ガソリン":"⛽","サブスク":"📺","給与":"💴","単発バイト":"⏱️",
   // 以前のカテゴリー名(過去の記録の表示用)
   "家賃":"🏠","あおなぎ習い事費":"📚","学童費":"🎒","学校費":"🏫","服代":"👕","外食費":"🍽️","行事費":"🎉","携帯代":"📱",
   "保険代":"🛡️","カード払い":"💳","借金返金代":"💸","飛向習い事費":"✏️","美容費":"💄","理髪代":"💇","予想外の出費":"⚠️",
@@ -232,6 +243,7 @@ function el(tag, props = {}, ...kids){
 }
 const pad2 = n => String(n).padStart(2, "0");
 const yen = n => "¥" + Number(n).toLocaleString("ja-JP");
+const signYen = n => (n > 0 ? "+" : n < 0 ? "−" : "") + yen(Math.abs(n));
 const toHalf = s => s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
 const WD = ["日","月","火","水","木","金","土"];
 const parseD = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
@@ -297,16 +309,16 @@ setTimeout(() => { if (!recentLoaded){ recentLoaded = true; refresh(); } }, 3000
 
 // ================= フォーム(入力・編集で共通) =================
 function buildForm(init){
+  let type = init.type === "income" ? "income" : "expense";
   const amount = el("input", {type:"text", class:"amount", inputMode:"numeric", placeholder:"0", autocomplete:"off", "aria-label":"金額"});
   if (init.amount) amount.value = Number(init.amount).toLocaleString("ja-JP");
   amount.addEventListener("input", () => {
     const d = toHalf(amount.value).replace(/[^0-9]/g, "").slice(0, 9);
     amount.value = d ? Number(d).toLocaleString("ja-JP") : "";
   });
+  const date = el("input", {type:"date", value: init.date || todayStr(), "aria-label":"日付"});
 
-  const date = el("input", {type:"date", value: init.date || todayStr(), "aria-label":"購入日"});
-
-  // --- 共有 / 個人 ---
+  // --- 支出: 共有 / 個人 とカテゴリー ---
   let scope = init.scope === "個人" ? "個人" : "共有";
   const category = el("select", {"aria-label":"カテゴリー"});
   function fillCats(keep){
@@ -315,7 +327,7 @@ function buildForm(init){
     category.replaceChildren(el("option", {value:""}, "選択してください"), ...list.map(c => el("option", {value:c}, catLabel(c))));
     category.value = list.includes(keep) ? keep : "";
   }
-  fillCats(init.category);
+  fillCats(init.type === "income" ? "" : init.category);
   const scopeBtns = SCOPES.map(sc => {
     const b = el("button", {type:"button", class:"seg"}, `${sc}カテゴリ`);
     b.addEventListener("click", () => {
@@ -329,8 +341,8 @@ function buildForm(init){
   function scopeSync(){ scopeBtns.forEach((b, i) => { const on = SCOPES[i] === scope; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }); }
   scopeSync();
 
-  // --- 支払方法(未選択なら共有現金) ---
-  let method = init.method === FALLBACK_METHOD ? "" : (init.method || "");
+  // --- 支出: 支払方法(未選択なら共有現金) ---
+  let method = init.type === "income" || init.method === FALLBACK_METHOD ? "" : (init.method || "");
   const opts = METHODS.filter(m => !m.hidden).map(m => m.n);
   if (method && !opts.includes(method)) opts.push(method);
   const chips = opts.map(n => {
@@ -345,13 +357,52 @@ function buildForm(init){
   function sync(){ chips.forEach((b, i) => { const on = opts[i] === method; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }); }
   sync();
 
-  const node = el("div", {},
-    el("div", {class:"field"}, el("label", {}, "金額(円)"), el("div", {class:"amount-wrap"}, el("span", {}, "¥"), amount)),
-    el("div", {class:"field"}, el("label", {}, "購入日"), date),
+  // --- 収入: 種類(給与・単発バイト)と受取人 ---
+  let incCat = init.type === "income" && INCOME_CATS.includes(init.category) ? init.category : INCOME_CATS[0];
+  const incBtns = INCOME_CATS.map(c => {
+    const b = el("button", {type:"button", class:"chip"}, catLabel(c));
+    b.addEventListener("click", () => { incCat = c; incSync(); });
+    return b;
+  });
+  function incSync(){ incBtns.forEach((b, i) => { const on = INCOME_CATS[i] === incCat; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }); }
+  incSync();
+  let who = PEOPLE.includes(init.who) ? init.who : "";
+  const whoBtns = PEOPLE.map(w => {
+    const b = el("button", {type:"button", class:"chip"}, whoLabel(w));
+    b.addEventListener("click", () => { who = (who === w) ? "" : w; whoSync(); if (init.onWho) init.onWho(who); });
+    return b;
+  });
+  function whoSync(){ whoBtns.forEach((b, i) => { const on = PEOPLE[i] === who; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }); }
+  whoSync();
+
+  const expenseBlock = el("div", {},
     el("div", {class:"field"}, el("div", {class:"lab"}, "区分とカテゴリー"),
       el("div", {class:"segs two", role:"group", style:"margin-bottom:8px"}, ...scopeBtns), category),
     el("div", {class:"field"}, el("div", {class:"lab"}, "支払方法"), el("div", {class:"chips", role:"group"}, ...chips),
       el("div", {class:"hint"}, "未選択のときは「共有現金」として記録されます")));
+  const incomeBlock = el("div", {},
+    el("div", {class:"field"}, el("div", {class:"lab"}, "収入の種類"), el("div", {class:"chips", role:"group"}, ...incBtns)),
+    el("div", {class:"field"}, el("div", {class:"lab"}, "受取人"), el("div", {class:"chips", role:"group"}, ...whoBtns)));
+
+  // --- 支出 / 収入 の切り替え(編集時は固定) ---
+  const TYPES = [["expense", "支出"], ["income", "収入"]];
+  const typeBtns = TYPES.map(([k, t]) => {
+    const b = el("button", {type:"button", class:"seg"}, t);
+    b.addEventListener("click", () => { type = k; typeSync(); });
+    return b;
+  });
+  function typeSync(){
+    typeBtns.forEach((b, i) => { const on = TYPES[i][0] === type; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
+    expenseBlock.hidden = type !== "expense";
+    incomeBlock.hidden = type !== "income";
+  }
+  typeSync();
+  const typeBar = init.lockType ? null : el("div", {class:"segs two", role:"group", "aria-label":"支出か収入か", style:"margin-bottom:16px"}, ...typeBtns);
+
+  const node = el("div", {}, typeBar,
+    el("div", {class:"field"}, el("label", {}, "金額(円)"), el("div", {class:"amount-wrap"}, el("span", {}, "¥"), amount)),
+    el("div", {class:"field"}, el("label", {}, "日付"), date),
+    expenseBlock, incomeBlock);
 
   return {
     el: node,
@@ -359,26 +410,30 @@ function buildForm(init){
     get(){
       const amt = Number(toHalf(amount.value).replace(/[^0-9]/g, ""));
       if (!amt){ toast("金額を入力してください"); return null; }
-      if (!date.value){ toast("購入日を選んでください"); return null; }
+      if (!date.value){ toast("日付を選んでください"); return null; }
+      if (type === "income"){
+        if (!who){ toast("受取人を選んでください"); return null; }
+        return { amount: amt, date: date.value, category: incCat, method: "収入", who, type: "income" };
+      }
       if (!category.value){ toast("カテゴリーを選んでください"); return null; }
-      return { amount: amt, date: date.value, category: category.value, method: method || FALLBACK_METHOD, scope };
+      return { amount: amt, date: date.value, category: category.value, method: method || FALLBACK_METHOD, scope, type: "expense" };
     }
   };
 }
 
 // ================= 編集シート =================
 function openSheet(entry){
-  const f = buildForm({ ...entry, scope: scopeOf(entry) });
+  const f = buildForm({ ...entry, scope: scopeOf(entry), lockType: true });
   const back = el("div", {class:"sheet-back"});
   const close = () => { back.remove(); document.body.classList.remove("no-scroll"); };
   const sheet = el("div", {class:"sheet", role:"dialog", "aria-modal":"true"},
-    el("h2", {}, "支出を編集"), f.el,
+    el("h2", {}, isIncome(entry) ? "収入を編集" : "支出を編集"), f.el,
     el("button", {type:"button", class:"btn primary block", onclick: () => {
       const v = f.get(); if (!v) return;
       safe(updateDoc(entryRef(entry.id), v)); close(); toast("保存しました");
     }}, "保存"),
     el("button", {type:"button", class:"btn danger block", onclick: () => {
-      if (confirm("この支出を削除しますか?")){ safe(deleteDoc(entryRef(entry.id))); close(); toast("削除しました"); }
+      if (confirm(isIncome(entry) ? "この収入を削除しますか?" : "この支出を削除しますか?")){ safe(deleteDoc(entryRef(entry.id))); close(); toast("削除しました"); }
     }}, "削除"),
     el("button", {type:"button", class:"btn block", onclick: close}, "閉じる"));
   back.addEventListener("click", e => { if (e.target === back) close(); });
@@ -389,11 +444,14 @@ function openSheet(entry){
 
 // ================= 部品 =================
 function entryRow(e, showDate){
-  const sub = [showDate ? fmtDay(e.date) : null, scopeOf(e), methodLabel(e.method)].filter(Boolean).join(" ・ ");
+  const inc = isIncome(e);
+  const sub = (inc
+    ? [showDate ? fmtDay(e.date) : null, "収入", e.who ? whoLabel(e.who) : null]
+    : [showDate ? fmtDay(e.date) : null, scopeOf(e), methodLabel(e.method)]).filter(Boolean).join(" ・ ");
   return el("button", {type:"button", class:"entry", onclick: () => openSheet(e)},
     el("div", {class:"e-ico", "aria-hidden":"true"}, catIcon(e.category)),
     el("div", {class:"e-main"}, el("div", {class:"e-cat"}, e.category), el("div", {class:"e-sub"}, sub)),
-    el("div", {class:"e-amt"}, yen(e.amount)));
+    el("div", {class:"e-amt" + (inc ? " pos" : "")}, (inc ? "+" : "") + yen(e.amount)));
 }
 function barRow(label, value, total, tag = "div", onclick){
   const pct = total ? Math.round(value / total * 100) : 0;
@@ -422,6 +480,26 @@ function totalCard(label, list){
     el("div", {class:"split"},
       el("div", {}, el("span", {}, "共有"), el("b", {}, yen(shared))),
       el("div", {}, el("span", {}, "個人"), el("b", {}, yen(all - shared)))));
+}
+// 収支(収入 − 支出。プラスもマイナスも表示)
+function summaryCard(label, list){
+  const inc = sum(list.filter(isIncome));
+  const exp = sum(list.filter(e => !isIncome(e)));
+  const bal = inc - exp;
+  return el("div", {class:"card total"},
+    el("div", {class:"lab"}, label),
+    el("div", {class:"num " + (bal < 0 ? "neg" : "pos")}, signYen(bal)),
+    el("div", {class:"split"},
+      el("div", {}, el("span", {}, "収入"), el("b", {class:"pos"}, yen(inc))),
+      el("div", {}, el("span", {}, "支出"), el("b", {}, yen(exp)))));
+}
+function incomeCard(list){
+  if (!list.length) return null;
+  const total = sum(list);
+  return el("div", {class:"card"}, el("h2", {}, `収入の内訳 ・ ${yen(total)}`),
+    ...sumBy(list, e => e.category).map(([k, v]) => barRow(catLabel(k), v, total)),
+    el("div", {class:"subh"}, "受取人別"),
+    ...PEOPLE.map(w => barRow(whoLabel(w), sum(list.filter(e => e.who === w)), total)));
 }
 function filterBar(){
   const opts = [["all", "すべて"], ["共有", "共有"], ["個人", "個人"]];
@@ -453,6 +531,8 @@ const savedScope = lsGet("budget-last-scope");
 const form = buildForm({
   date: todayStr(),
   scope: savedScope === "個人" ? "個人" : "共有",
+  who: lsGet("budget-last-who"),
+  onWho: w => lsSet("budget-last-who", w),
   method: METHODS.some(m => !m.hidden && m.n === savedMethod) ? savedMethod : "",
   onMethod: n => lsSet("budget-last-method", n),
   onScope: s => lsSet("budget-last-scope", s)
@@ -462,8 +542,12 @@ const recentSlot = el("div", {});
 const addBtn = el("button", {type:"button", class:"btn primary block", onclick: () => {
   const v = form.get(); if (!v) return;
   safe(setDoc(doc(col), { ...v, createdAt: Date.now() }));
-  lsSet("budget-last-method", v.method === FALLBACK_METHOD ? "" : v.method);
-  lsSet("budget-last-scope", v.scope);
+  if (v.type === "income"){
+    lsSet("budget-last-who", v.who);
+  }else{
+    lsSet("budget-last-method", v.method === FALLBACK_METHOD ? "" : v.method);
+    lsSet("budget-last-scope", v.scope);
+  }
   form.reset();
   toast("追加しました");
 }}, "追加する");
@@ -473,7 +557,10 @@ function renderInputDynamic(){
   const t = todayStr();
   const ym = t.slice(0, 7);
   if (state.year === Number(t.slice(0, 4)) && yearLoaded){
-    monthTotalSlot.replaceChildren(totalCard(`${Number(t.slice(5, 7))}月の支出合計`, yearEntries.filter(e => e.date.startsWith(ym))));
+    const monthAll = yearEntries.filter(e => e.date.startsWith(ym));
+    const exp = monthAll.filter(e => !isIncome(e));
+    const mm = Number(t.slice(5, 7));
+    monthTotalSlot.replaceChildren(summaryCard(`${mm}月の収支`, monthAll), ...(exp.length ? [totalCard(`${mm}月の支出合計`, exp)] : []));
   }else{
     monthTotalSlot.replaceChildren();
   }
@@ -511,26 +598,38 @@ function renderMonth(){
   if (!yearLoaded){ v.replaceChildren(head, el("div", {class:"empty"}, "読み込み中…")); return; }
   const prefix = `${state.year}-${pad2(state.month)}-`;
   const monthAll = yearEntries.filter(e => e.date.startsWith(prefix));
-  const kids = [head, totalCard(`${state.month}月の支出合計`, monthAll)];
+  const exp = monthAll.filter(e => !isIncome(e));
+  const inc = monthAll.filter(isIncome);
+  const kids = [head, summaryCard(`${state.month}月の収支`, monthAll)];
   if (!monthAll.length){
     kids.push(el("div", {class:"empty"}, "この月の記録はまだありません"));
   }else{
-    kids.push(filterBar());
-    const list = applyFilter(monthAll);
-    const total = sum(list);
-    if (!list.length){
-      kids.push(el("div", {class:"empty"}, "この区分の記録はありません"));
-    }else{
-      kids.push(...categoryCards(list));
-      kids.push(whoCard(list, total));
-      kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total, methodLabel));
+    kids.push(incomeCard(inc));
+    let list = [];
+    if (exp.length){
+      kids.push(totalCard(`${state.month}月の支出合計`, exp));
+      kids.push(filterBar());
+      list = applyFilter(exp);
+      const total = sum(list);
+      if (!list.length){
+        kids.push(el("div", {class:"empty"}, "この区分の支出はありません"));
+      }else{
+        kids.push(...categoryCards(list));
+        kids.push(whoCard(list, total));
+        kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total, methodLabel));
+      }
+    }
+    // 収入には共有/個人の区分がないので、明細には「すべて」のときだけ入れる
+    const detail = state.filter === "all" ? [...list, ...inc] : list;
+    if (detail.length){
       kids.push(el("h2", {}, "明細"));
-      const sorted = [...list].sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
+      const sorted = [...detail].sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
       let cur = "";
       for (const e of sorted){
         if (e.date !== cur){
           cur = e.date;
-          kids.push(el("div", {class:"day"}, el("span", {}, fmtDayLong(cur)), el("span", {}, yen(sum(list.filter(x => x.date === cur))))));
+          const dayExp = sum(detail.filter(x => x.date === cur && !isIncome(x)));
+          kids.push(el("div", {class:"day"}, el("span", {}, fmtDayLong(cur)), el("span", {}, dayExp ? yen(dayExp) : "")));
         }
         kids.push(entryRow(e, false));
       }
@@ -546,23 +645,41 @@ function renderYear(){
   const v = views.year;
   const head = nav(`${state.year}年`, () => setPeriod(state.year - 1, state.month), () => setPeriod(state.year + 1, state.month));
   if (!yearLoaded){ v.replaceChildren(head, el("div", {class:"empty"}, "読み込み中…")); return; }
-  const kids = [head, totalCard(`${state.year}年の支出合計`, yearEntries)];
+  const exp = yearEntries.filter(e => !isIncome(e));
+  const inc = yearEntries.filter(isIncome);
+  const kids = [head, summaryCard(`${state.year}年の収支`, yearEntries)];
   if (!yearEntries.length){
     kids.push(el("div", {class:"empty"}, "この年の記録はまだありません"));
   }else{
-    kids.push(filterBar());
-    const list = applyFilter(yearEntries);
-    const total = sum(list);
-    if (!list.length){
-      kids.push(el("div", {class:"empty"}, "この区分の記録はありません"));
-    }else{
-      const byMonth = Array.from({length:12}, (_, i) => sum(list.filter(e => e.date.startsWith(`${state.year}-${pad2(i + 1)}-`))));
-      const max = Math.max(...byMonth);
-      kids.push(el("div", {class:"card"}, el("h2", {}, "月ごとの推移(タップで月別へ)"),
-        ...byMonth.map((val, i) => barRow(`${i + 1}月`, val, max, "button", () => { setPeriod(state.year, i + 1); setTab("month"); }))));
-      kids.push(...categoryCards(list));
-      kids.push(whoCard(list, total));
-      kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total, methodLabel));
+    kids.push(incomeCard(inc));
+
+    // 月ごとの収支(収入 − 支出)
+    const rows = Array.from({length:12}, (_, i) => {
+      const m = yearEntries.filter(e => e.date.startsWith(`${state.year}-${pad2(i + 1)}-`));
+      const mi = sum(m.filter(isIncome)), me = sum(m.filter(e => !isIncome(e)));
+      return { i, mi, me, bal: mi - me, n: m.length };
+    });
+    kids.push(el("div", {class:"card"}, el("h2", {}, "月ごとの収支(タップで月別へ)"),
+      ...rows.map(r => el("button", {type:"button", class:"balrow", onclick: () => { setPeriod(state.year, r.i + 1); setTab("month"); }},
+        el("div", {}, el("div", {}, `${r.i + 1}月`), r.n ? el("div", {class:"sub"}, `収入 ${yen(r.mi)} ・ 支出 ${yen(r.me)}`) : null),
+        el("div", {class:"v " + (r.n ? (r.bal < 0 ? "neg" : "pos") : "")}, r.n ? signYen(r.bal) : "—")))));
+
+    if (exp.length){
+      kids.push(totalCard(`${state.year}年の支出合計`, exp));
+      kids.push(filterBar());
+      const list = applyFilter(exp);
+      const total = sum(list);
+      if (!list.length){
+        kids.push(el("div", {class:"empty"}, "この区分の支出はありません"));
+      }else{
+        const byMonth = Array.from({length:12}, (_, i) => sum(list.filter(e => e.date.startsWith(`${state.year}-${pad2(i + 1)}-`))));
+        const max = Math.max(...byMonth);
+        kids.push(el("div", {class:"card"}, el("h2", {}, "月ごとの支出の推移"),
+          ...byMonth.map((val, i) => barRow(`${i + 1}月`, val, max, "button", () => { setPeriod(state.year, i + 1); setTab("month"); }))));
+        kids.push(...categoryCards(list));
+        kids.push(whoCard(list, total));
+        kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total, methodLabel));
+      }
     }
   }
   const y = window.scrollY;
