@@ -110,6 +110,14 @@ button.brow{display:block; width:100%; text-align:left; background:none; border:
 .e-sub{font-size:.8rem; color:var(--sub)}
 .e-amt{white-space:nowrap; font-size:1.05rem}
 .empty{color:var(--sub); text-align:center; padding:28px 8px}
+.mhead{display:flex; justify-content:space-between; align-items:center; gap:10px; width:calc(100% - 4px); text-align:left;
+  background:var(--surface); border:3px solid var(--line); border-radius:0; box-shadow:3px 3px 0 var(--shadow);
+  min-height:52px; padding:0 12px; margin:0 4px 10px 0}
+.mhead[aria-expanded="true"]{background:var(--accent); color:var(--accent-ink)}
+.mhead .cnt{font-size:.85rem; opacity:.8}
+.tpls{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+.chip.tpl{min-height:56px}
+.tpl-amt{font-size:.75rem; color:var(--sub)}
 .pos{color:var(--pos)}
 .neg{color:var(--danger)}
 .subh{font-size:.85rem; color:var(--sub); margin:14px 0 10px; padding-top:10px; border-top:3px dotted var(--line)}
@@ -120,7 +128,7 @@ button.balrow:last-child{border-bottom:none}
 .balrow .v{font-size:1.05rem; white-space:nowrap}
 
 #tabs{position:fixed; left:0; right:0; bottom:0; z-index:10; background:var(--surface); border-top:3px solid var(--line);
-  display:grid; grid-template-columns:repeat(3,1fr); padding-bottom:env(safe-area-inset-bottom)}
+  display:grid; grid-template-columns:repeat(4,1fr); padding-bottom:env(safe-area-inset-bottom)}
 #tabs button{background:none; border:none; padding:8px 0 6px; min-height:58px; display:flex; flex-direction:column; align-items:center; gap:3px; color:var(--sub); font-size:.78rem}
 #tabs button + button{border-left:3px solid var(--line)}
 #tabs button.on{background:var(--accent); color:var(--accent-ink)}
@@ -150,6 +158,7 @@ button.balrow:last-child{border-bottom:none}
     <div id="v-input"></div>
     <div id="v-month" hidden></div>
     <div id="v-year" hidden></div>
+    <div id="v-master" hidden></div>
   </main>
 </div>
 <nav id="tabs" aria-label="画面切り替え"></nav>
@@ -172,7 +181,7 @@ button.balrow:last-child{border-bottom:none}
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, orderBy, limit
+  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -182,16 +191,23 @@ const CATS = {
   "共有": ["家賃＆水道","光熱費","食費","習い事","学童","学校","医療費","衣服","娯楽費","外食","お祝い金","お泊り代","理髪","消耗品","その他"],
   "個人": ["食費","習い事","医療費","衣服","娯楽費","外食","お祝い金","携帯","保険","カード","車ローン","奨学金","借金返済","美容","理髪","貯金","ATM手数料","ガソリン","サブスク","その他"]
 };
+// 保存される支払方法の名前は「支払者 + 種類」(例: ひなた現金)。未選択は「共有現金」
 const METHODS = [
   { n:"ひなた現金", who:"ひなた" },
   { n:"ぐしけん現金", who:"ぐしけん" },
-  { n:"共有現金", who:"共有", hidden:true },   // ボタンには出さない。未選択のときの記録先
+  { n:"共有現金", who:"共有" },
   { n:"ひなた個人カード", who:"ひなた" },
   { n:"ぐしけん個人カード", who:"ぐしけん" },
   { n:"ひなたコード決済", who:"ひなた" },
   { n:"ぐしけんコード決済", who:"ぐしけん" },
   { n:"ひなた口座引落", who:"ひなた" },
   { n:"ぐしけん口座引落", who:"ぐしけん" }
+];
+const PAY_TYPES = [
+  { key:"現金",       name:"現金",       alias:["現金"] },
+  { key:"カード",     name:"個人カード", alias:["個人カード", "カード"] },
+  { key:"コード決済", name:"コード決済", alias:["コード決済"] },
+  { key:"口座引落",   name:"口座引落",   alias:["口座引落", "引落", "口座引き落とし"] }
 ];
 const FALLBACK_METHOD = "共有現金";
 const WHO = ["ひなた", "ぐしけん", "共有"];
@@ -208,6 +224,17 @@ const whoOf = m => {
   return "その他";
 };
 const scopeOf = e => e.scope === "個人" ? "個人" : "共有";   // 区分のない古い記録は「共有」扱い
+
+// 保存された支払方法の名前 → 支払者と種類
+function parsePay(n){
+  n = String(n || "");
+  if (!n || n === FALLBACK_METHOD) return { person:"", ptype:"", ok:true };
+  const person = PEOPLE.find(p => n.startsWith(p)) || "";
+  if (!person) return { person:"", ptype:"", ok:false };
+  const rest = n.slice(person.length);
+  const t = PAY_TYPES.find(p => p.alias.includes(rest));
+  return t ? { person, ptype:t.key, ok:true } : { person, ptype:"", ok:false };
+}
 
 // 保存されるのは名前だけ。アイコンは表示のときに付けます
 const CAT_ICON = {
@@ -229,7 +256,7 @@ const methodLabel = n => { const ic = WHO_ICON[whoOf(n)]; return ic ? `${ic} ${n
 // ================= 共通ヘルパー =================
 const $ = id => document.getElementById(id);
 const toastEl = $("toast");
-function toast(msg){ toastEl.textContent = msg; toastEl.classList.add("show"); setTimeout(()=>toastEl.classList.remove("show"), 2000); }
+function toast(msg){ toastEl.textContent = msg; toastEl.classList.add("show"); setTimeout(()=>toastEl.classList.remove("show"), 2200); }
 function el(tag, props = {}, ...kids){
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(props)){
@@ -248,7 +275,6 @@ const toHalf = s => s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeA
 const WD = ["日","月","火","水","木","金","土"];
 const parseD = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const fmtDay = s => { const d = parseD(s); return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`; };
-const fmtDayLong = s => { const d = parseD(s); return `${d.getMonth()+1}月${d.getDate()}日(${WD[d.getDay()]})`; };
 function todayStr(){ const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
 const sum = list => list.reduce((a, e) => a + e.amount, 0);
 function sumBy(list, keyFn){
@@ -271,14 +297,18 @@ try{
 }catch(e){ db = getFirestore(app); }
 const col = collection(db, "households", "main", "entries");
 const entryRef = id => doc(col, id);
+const tplCol = collection(db, "households", "main", "templates");
+const tplRef = id => doc(tplCol, id);
 const safe = p => Promise.resolve(p).catch(e => { console.error(e); toast("保存できませんでした。通信を確認してください"); });
 
 // ================= 状態 =================
 const now = new Date();
 const state = { tab:"input", year: now.getFullYear(), month: now.getMonth() + 1, filter:"all" };
 let yearEntries = [], yearLoaded = false, unsubYear = null;
-let recentEntries = [], recentLoaded = false;
+let histEntries = [], histLoaded = false;
+let templates = [], tplError = false;
 let online = false;
+const openMonths = new Set();   // 入力タブの履歴で開いている月
 
 function onErr(err){
   console.error(err);
@@ -298,20 +328,44 @@ function subscribeYear(y){
   }, onErr);
   setTimeout(() => { if (!yearLoaded && state.year === y){ yearLoaded = true; refresh(); } }, 3000);
 }
-onSnapshot(query(col, orderBy("createdAt", "desc"), limit(30)), snap => {
-  if (snap.metadata.fromCache && snap.empty && !recentLoaded){ return; }
-  recentLoaded = true;
+// 入力タブの履歴: 半年分(今月を含む6か月)
+function histStartStr(){
+  const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 5);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-01`;
+}
+onSnapshot(query(col, where("date", ">=", histStartStr())), snap => {
+  if (snap.metadata.fromCache && snap.empty && !histLoaded) return;
+  histLoaded = true;
   online = online || !snap.metadata.fromCache;
-  recentEntries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  histEntries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   refresh();
 }, onErr);
-setTimeout(() => { if (!recentLoaded){ recentLoaded = true; refresh(); } }, 3000);
+setTimeout(() => { if (!histLoaded){ histLoaded = true; refresh(); } }, 3000);
+// テンプレート(マスタ)
+onSnapshot(tplCol, snap => {
+  tplError = false;
+  templates = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (a.order ?? a.createdAt ?? 0) - (b.order ?? b.createdAt ?? 0));
+  refresh();
+}, err => { console.error(err); tplError = true; refresh(); });
 
-// ================= フォーム(入力・編集で共通) =================
+// ================= モーダル =================
+function openModal(...kids){
+  const back = el("div", {class:"sheet-back"});
+  const close = () => { back.remove(); document.body.classList.remove("no-scroll"); };
+  back.addEventListener("click", e => { if (e.target === back) close(); });
+  back.append(el("div", {class:"sheet", role:"dialog", "aria-modal":"true"}, ...kids));
+  document.body.append(back);
+  document.body.classList.add("no-scroll");
+  return close;
+}
+
+// ================= フォーム(入力・編集・テンプレートで共通) =================
 function buildForm(init){
   let type = init.type === "income" ? "income" : "expense";
   const amount = el("input", {type:"text", class:"amount", inputMode:"numeric", placeholder:"0", autocomplete:"off", "aria-label":"金額"});
-  if (init.amount) amount.value = Number(init.amount).toLocaleString("ja-JP");
+  const setAmount = n => { amount.value = n ? Number(n).toLocaleString("ja-JP") : ""; };
+  setAmount(init.amount);
   amount.addEventListener("input", () => {
     const d = toHalf(amount.value).replace(/[^0-9]/g, "").slice(0, 9);
     amount.value = d ? Number(d).toLocaleString("ja-JP") : "";
@@ -341,21 +395,27 @@ function buildForm(init){
   function scopeSync(){ scopeBtns.forEach((b, i) => { const on = SCOPES[i] === scope; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }); }
   scopeSync();
 
-  // --- 支出: 支払方法(未選択なら共有現金) ---
-  let method = init.type === "income" || init.method === FALLBACK_METHOD ? "" : (init.method || "");
-  const opts = METHODS.filter(m => !m.hidden).map(m => m.n);
-  if (method && !opts.includes(method)) opts.push(method);
-  const chips = opts.map(n => {
-    const b = el("button", {type:"button", class:"chip"}, methodLabel(n));
-    b.addEventListener("click", () => {
-      method = (method === n) ? "" : n;      // もう一度タップすると選択を外せる
-      sync();
-      if (init.onMethod) init.onMethod(method);
-    });
+  // --- 支出: 支払い者(ひなた/ぐしけん) + 支払方法(現金/カード/コード決済/口座引落) ---
+  const ip = parsePay(init.type === "income" ? "" : init.method);
+  let person = ip.person || (init.method == null ? (PEOPLE.includes(init.person) ? init.person : "") : "");
+  let ptype  = ip.ptype  || (init.method == null ? (PAY_TYPES.some(p => p.key === init.ptype) ? init.ptype : "") : "");
+  let rawMethod = (!ip.ok && init.type !== "income" && init.method) ? String(init.method) : null;   // 一覧にない古い名前
+  let payTouched = false;
+  const personBtns = PEOPLE.map(w => {
+    const b = el("button", {type:"button", class:"chip"}, whoLabel(w));
+    b.addEventListener("click", () => { person = person === w ? "" : w; payTouched = true; paySync(); if (init.onPay) init.onPay(person, ptype); });
     return b;
   });
-  function sync(){ chips.forEach((b, i) => { const on = opts[i] === method; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }); }
-  sync();
+  const typeBtns2 = PAY_TYPES.map(p => {
+    const b = el("button", {type:"button", class:"chip"}, p.key);
+    b.addEventListener("click", () => { ptype = ptype === p.key ? "" : p.key; payTouched = true; paySync(); if (init.onPay) init.onPay(person, ptype); });
+    return b;
+  });
+  function paySync(){
+    personBtns.forEach((b, i) => { const on = PEOPLE[i] === person; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
+    typeBtns2.forEach((b, i) => { const on = PAY_TYPES[i].key === ptype; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
+  }
+  paySync();
 
   // --- 収入: 種類(給与・単発バイト)と受取人 ---
   let incCat = init.type === "income" && INCOME_CATS.includes(init.category) ? init.category : INCOME_CATS[0];
@@ -369,7 +429,7 @@ function buildForm(init){
   let who = PEOPLE.includes(init.who) ? init.who : "";
   const whoBtns = PEOPLE.map(w => {
     const b = el("button", {type:"button", class:"chip"}, whoLabel(w));
-    b.addEventListener("click", () => { who = (who === w) ? "" : w; whoSync(); if (init.onWho) init.onWho(who); });
+    b.addEventListener("click", () => { who = who === w ? "" : w; whoSync(); if (init.onWho) init.onWho(who); });
     return b;
   });
   function whoSync(){ whoBtns.forEach((b, i) => { const on = PEOPLE[i] === who; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }); }
@@ -378,8 +438,9 @@ function buildForm(init){
   const expenseBlock = el("div", {},
     el("div", {class:"field"}, el("div", {class:"lab"}, "区分とカテゴリー"),
       el("div", {class:"segs two", role:"group", style:"margin-bottom:8px"}, ...scopeBtns), category),
-    el("div", {class:"field"}, el("div", {class:"lab"}, "支払方法"), el("div", {class:"chips", role:"group"}, ...chips),
-      el("div", {class:"hint"}, "未選択のときは「共有現金」として記録されます")));
+    el("div", {class:"field"}, el("div", {class:"lab"}, "支払い者"), el("div", {class:"chips", role:"group"}, ...personBtns)),
+    el("div", {class:"field"}, el("div", {class:"lab"}, "支払方法"), el("div", {class:"chips", role:"group"}, ...typeBtns2),
+      el("div", {class:"hint"}, "どちらも未選択のときは「共有現金」として記録されます(もう一度タップで解除)")));
   const incomeBlock = el("div", {},
     el("div", {class:"field"}, el("div", {class:"lab"}, "収入の種類"), el("div", {class:"chips", role:"group"}, ...incBtns)),
     el("div", {class:"field"}, el("div", {class:"lab"}, "受取人"), el("div", {class:"chips", role:"group"}, ...whoBtns)));
@@ -400,33 +461,53 @@ function buildForm(init){
   const typeBar = init.lockType ? null : el("div", {class:"segs two", role:"group", "aria-label":"支出か収入か", style:"margin-bottom:16px"}, ...typeBtns);
 
   const node = el("div", {}, typeBar,
-    el("div", {class:"field"}, el("label", {}, "金額(円)"), el("div", {class:"amount-wrap"}, el("span", {}, "¥"), amount)),
-    el("div", {class:"field"}, el("label", {}, "日付"), date),
+    el("div", {class:"field"}, el("label", {}, init.amountOptional ? "金額(円)・空でもOK" : "金額(円)"), el("div", {class:"amount-wrap"}, el("span", {}, "¥"), amount)),
+    init.noDate ? null : el("div", {class:"field"}, el("label", {}, "日付"), date),
     expenseBlock, incomeBlock);
 
   return {
     el: node,
     reset(){ amount.value = ""; category.value = ""; },
-    get(){
+    // テンプレートの内容を入力欄にセット(日付は変えない)
+    fill(v){
+      type = v.type === "income" ? "income" : "expense";
+      typeSync();
+      setAmount(v.amount);
+      if (type === "income"){
+        incCat = INCOME_CATS.includes(v.category) ? v.category : INCOME_CATS[0]; incSync();
+        who = PEOPLE.includes(v.who) ? v.who : ""; whoSync();
+      }else{
+        scope = v.scope === "個人" ? "個人" : "共有"; scopeSync(); fillCats(v.category);
+        const p = parsePay(v.method);
+        person = p.person; ptype = p.ptype; rawMethod = null; payTouched = true; paySync();
+      }
+    },
+    get(opts = {}){
       const amt = Number(toHalf(amount.value).replace(/[^0-9]/g, ""));
-      if (!amt){ toast("金額を入力してください"); return null; }
-      if (!date.value){ toast("日付を選んでください"); return null; }
+      if (!opts.template){
+        if (!amt){ toast("金額を入力してください"); return null; }
+        if (!date.value){ toast("日付を選んでください"); return null; }
+      }
       if (type === "income"){
         if (!who){ toast("受取人を選んでください"); return null; }
         return { amount: amt, date: date.value, category: incCat, method: "収入", who, type: "income" };
       }
       if (!category.value){ toast("カテゴリーを選んでください"); return null; }
-      return { amount: amt, date: date.value, category: category.value, method: method || FALLBACK_METHOD, scope, type: "expense" };
+      let method;
+      if (rawMethod && !payTouched) method = rawMethod;
+      else if (!person && !ptype) method = FALLBACK_METHOD;
+      else if (person && ptype) method = person + PAY_TYPES.find(p => p.key === ptype).name;
+      else { toast(person ? "支払方法(現金・カードなど)を選んでください" : "支払い者(ひなた・ぐしけん)を選んでください"); return null; }
+      return { amount: amt, date: date.value, category: category.value, method, scope, type: "expense" };
     }
   };
 }
 
-// ================= 編集シート =================
+// ================= 編集シート(入力済みの記録) =================
 function openSheet(entry){
   const f = buildForm({ ...entry, scope: scopeOf(entry), lockType: true });
-  const back = el("div", {class:"sheet-back"});
-  const close = () => { back.remove(); document.body.classList.remove("no-scroll"); };
-  const sheet = el("div", {class:"sheet", role:"dialog", "aria-modal":"true"},
+  let close;
+  close = openModal(
     el("h2", {}, isIncome(entry) ? "収入を編集" : "支出を編集"), f.el,
     el("button", {type:"button", class:"btn primary block", onclick: () => {
       const v = f.get(); if (!v) return;
@@ -435,11 +516,33 @@ function openSheet(entry){
     el("button", {type:"button", class:"btn danger block", onclick: () => {
       if (confirm(isIncome(entry) ? "この収入を削除しますか?" : "この支出を削除しますか?")){ safe(deleteDoc(entryRef(entry.id))); close(); toast("削除しました"); }
     }}, "削除"),
-    el("button", {type:"button", class:"btn block", onclick: close}, "閉じる"));
-  back.addEventListener("click", e => { if (e.target === back) close(); });
-  back.append(sheet);
-  document.body.append(back);
-  document.body.classList.add("no-scroll");
+    el("button", {type:"button", class:"btn block", onclick: () => close()}, "閉じる"));
+}
+
+// ================= 編集シート(テンプレート) =================
+function openTemplateSheet(t){
+  const name = el("input", {type:"text", placeholder:"例: 家賃、給与、ネット代", value: t ? t.name : "", maxLength:20, autocomplete:"off", "aria-label":"テンプレート名"});
+  const f = buildForm({ ...(t || {}), noDate:true, amountOptional:true });
+  let close;
+  const kids = [
+    el("h2", {}, t ? "テンプレートを編集" : "テンプレートを追加"),
+    el("div", {class:"field"}, el("label", {}, "ボタンの名前"), name),
+    f.el,
+    el("button", {type:"button", class:"btn primary block", onclick: () => {
+      const nm = name.value.trim();
+      if (!nm){ toast("ボタンの名前を入力してください"); return; }
+      const v = f.get({ template:true }); if (!v) return;
+      const data = { name: nm, type: v.type, amount: v.amount, category: v.category, method: v.method,
+        ...(v.type === "income" ? { who: v.who } : { scope: v.scope }),
+        createdAt: t ? (t.createdAt || Date.now()) : Date.now(), order: t ? (t.order ?? t.createdAt ?? Date.now()) : Date.now() };
+      safe(setDoc(t ? tplRef(t.id) : doc(tplCol), data)); close(); toast("テンプレートを保存しました");
+    }}, "保存")
+  ];
+  if (t) kids.push(el("button", {type:"button", class:"btn danger block", onclick: () => {
+    if (confirm(`「${t.name}」を削除しますか?`)){ safe(deleteDoc(tplRef(t.id))); close(); toast("削除しました"); }
+  }}, "削除"));
+  kids.push(el("button", {type:"button", class:"btn block", onclick: () => close()}, "閉じる"));
+  close = openModal(...kids);
 }
 
 // ================= 部品 =================
@@ -471,7 +574,7 @@ function nav(label, onPrev, onNext){
     el("div", {class:"label"}, label),
     el("button", {type:"button", class:"btn", "aria-label":"次へ", onclick:onNext}, "▶"));
 }
-// すべての合計 + 共有 + 個人
+// 支出の合計 + 共有 + 個人
 function totalCard(label, list){
   const shared = sum(list.filter(e => scopeOf(e) === "共有"));
   const all = sum(list);
@@ -525,58 +628,101 @@ function categoryCards(list){
 }
 
 // ================= 画面: 入力 =================
-const views = { input: $("v-input"), month: $("v-month"), year: $("v-year") };
-const savedMethod = lsGet("budget-last-method");
-const savedScope = lsGet("budget-last-scope");
+const views = { input: $("v-input"), month: $("v-month"), year: $("v-year"), master: $("v-master") };
 const form = buildForm({
   date: todayStr(),
-  scope: savedScope === "個人" ? "個人" : "共有",
+  scope: lsGet("budget-last-scope") === "個人" ? "個人" : "共有",
+  person: lsGet("budget-last-person"),
+  ptype: lsGet("budget-last-ptype"),
   who: lsGet("budget-last-who"),
-  onWho: w => lsSet("budget-last-who", w),
-  method: METHODS.some(m => !m.hidden && m.n === savedMethod) ? savedMethod : "",
-  onMethod: n => lsSet("budget-last-method", n),
-  onScope: s => lsSet("budget-last-scope", s)
+  onPay: (p, t) => { lsSet("budget-last-person", p); lsSet("budget-last-ptype", t); },
+  onScope: s => lsSet("budget-last-scope", s),
+  onWho: w => lsSet("budget-last-who", w)
 });
-const monthTotalSlot = el("div", {});
-const recentSlot = el("div", {});
+const tplSlot = el("div", {});
+const histSlot = el("div", {});
 const addBtn = el("button", {type:"button", class:"btn primary block", onclick: () => {
   const v = form.get(); if (!v) return;
   safe(setDoc(doc(col), { ...v, createdAt: Date.now() }));
-  if (v.type === "income"){
-    lsSet("budget-last-who", v.who);
-  }else{
-    lsSet("budget-last-method", v.method === FALLBACK_METHOD ? "" : v.method);
-    lsSet("budget-last-scope", v.scope);
-  }
+  if (v.type === "income") lsSet("budget-last-who", v.who);
+  else lsSet("budget-last-scope", v.scope);
   form.reset();
   toast("追加しました");
 }}, "追加する");
-views.input.append(el("div", {class:"card"}, form.el, addBtn), monthTotalSlot, recentSlot);
+const formCard = el("div", {class:"card"}, form.el, addBtn);
+views.input.append(tplSlot, formCard, histSlot);
 
-function renderInputDynamic(){
-  const t = todayStr();
-  const ym = t.slice(0, 7);
-  if (state.year === Number(t.slice(0, 4)) && yearLoaded){
-    const monthAll = yearEntries.filter(e => e.date.startsWith(ym));
-    const exp = monthAll.filter(e => !isIncome(e));
-    const mm = Number(t.slice(5, 7));
-    monthTotalSlot.replaceChildren(summaryCard(`${mm}月の収支`, monthAll), ...(exp.length ? [totalCard(`${mm}月の支出合計`, exp)] : []));
-  }else{
-    monthTotalSlot.replaceChildren();
-  }
-  const kids = [el("h2", {}, "最近の入力")];
-  if (!recentLoaded) kids.push(el("div", {class:"empty"}, "読み込み中…"));
-  else if (!recentEntries.length) kids.push(el("div", {class:"empty"}, "まだ入力がありません"));
+function applyTemplate(t){
+  form.fill(t);
+  toast(`「${t.name}」をセットしました。内容を確認して「追加する」を押してください`);
+  formCard.scrollIntoView({ behavior:"smooth", block:"start" });
+}
+function renderTemplateButtons(){
+  const kids = [el("h2", {}, "テンプレート")];
+  if (tplError) kids.push(el("div", {class:"hint"}, "テンプレートを使うには、Firestore のルールの更新が必要です(README を見てください)"));
+  else if (!templates.length) kids.push(el("div", {class:"hint"}, "「マスタ」タブで登録すると、毎月の入力がここからワンタップでセットできます"));
+  else kids.push(el("div", {class:"tpls"}, ...templates.map(t =>
+    el("button", {type:"button", class:"chip tpl", onclick: () => applyTemplate(t)},
+      `${catIcon(t.category)} ${t.name}`,
+      t.amount ? el("div", {class:"tpl-amt"}, (t.type === "income" ? "+" : "") + yen(t.amount)) : null))));
+  tplSlot.replaceChildren(el("div", {class:"card"}, ...kids));
+}
+
+// 履歴: 半年分を月ごとにたたんで表示。月の見出しを押すと開く
+function renderHistory(){
+  const kids = [el("h2", {}, "最近の入力(半年分)")];
+  if (!histLoaded) kids.push(el("div", {class:"empty"}, "読み込み中…"));
+  else if (!histEntries.length) kids.push(el("div", {class:"empty"}, "まだ入力がありません"));
   else{
-    // 購入日の新しい順(同じ日は入力が新しい順)に並べ、日付ごとにまとめて表示
-    const sorted = [...recentEntries].sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
-    let cur = "";
-    for (const e of sorted){
-      if (e.date !== cur){ cur = e.date; kids.push(el("div", {class:"day"}, el("span", {}, fmtDayLong(cur)))); }
-      kids.push(entryRow(e, false));
+    const byMonth = new Map();
+    for (const e of histEntries){
+      const k = e.date.slice(0, 7);
+      if (!byMonth.has(k)) byMonth.set(k, []);
+      byMonth.get(k).push(e);
+    }
+    for (const k of [...byMonth.keys()].sort().reverse()){
+      const list = byMonth.get(k);
+      const open = openMonths.has(k);
+      const [y, m] = k.split("-");
+      kids.push(el("button", {type:"button", class:"mhead", "aria-expanded":String(open),
+        onclick: () => { if (open) openMonths.delete(k); else openMonths.add(k); const sy = window.scrollY; renderHistory(); window.scrollTo(0, sy); }},
+        el("span", {}, `${open ? "▼" : "▶"} ${y}年${Number(m)}月`), el("span", {class:"cnt"}, `${list.length}件`)));
+      if (open){
+        const sorted = [...list].sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
+        for (const e of sorted) kids.push(entryRow(e, true));
+      }
     }
   }
-  recentSlot.replaceChildren(...kids);
+  histSlot.replaceChildren(...kids);
+}
+function renderInput(){ renderTemplateButtons(); renderHistory(); }
+
+// ================= 画面: マスタ(テンプレートの登録) =================
+function renderMaster(){
+  const v = views.master;
+  const kids = [
+    el("h2", {}, "テンプレート(毎月の入力用)"),
+    el("div", {class:"hint", style:"margin:-4px 0 14px"}, "ここで登録したものが、入力タブのテンプレートボタンになります。ボタンを押すと入力欄に内容がセットされます。"),
+    el("button", {type:"button", class:"btn primary block", onclick: () => openTemplateSheet(null)}, "＋ テンプレートを追加")
+  ];
+  if (tplError) kids.push(el("div", {class:"card", style:"margin-top:16px"}, el("h2", {}, "ルールの更新が必要です"),
+    el("div", {class:"hint"}, "Firebase の Firestore の「ルール」に、新しい firestore.rules の内容を貼って「公開」してください。")));
+  else if (!templates.length) kids.push(el("div", {class:"empty"}, "まだテンプレートがありません"));
+  else{
+    kids.push(el("div", {style:"height:14px"}));
+    for (const t of templates){
+      const inc = t.type === "income";
+      const sub = (inc ? ["収入", t.category, t.who ? whoLabel(t.who) : null]
+                       : [scopeOf(t), t.category, methodLabel(t.method)]).filter(Boolean).join(" ・ ");
+      kids.push(el("button", {type:"button", class:"entry", onclick: () => openTemplateSheet(t)},
+        el("div", {class:"e-ico", "aria-hidden":"true"}, catIcon(t.category)),
+        el("div", {class:"e-main"}, el("div", {class:"e-cat"}, t.name), el("div", {class:"e-sub"}, sub)),
+        el("div", {class:"e-amt" + (inc ? " pos" : "")}, t.amount ? (inc ? "+" : "") + yen(t.amount) : "金額なし")));
+    }
+  }
+  const y = window.scrollY;
+  v.replaceChildren(...kids);
+  window.scrollTo(0, y);
 }
 
 // ================= 画面: 月別 =================
@@ -605,11 +751,10 @@ function renderMonth(){
     kids.push(el("div", {class:"empty"}, "この月の記録はまだありません"));
   }else{
     kids.push(incomeCard(inc));
-    let list = [];
     if (exp.length){
       kids.push(totalCard(`${state.month}月の支出合計`, exp));
       kids.push(filterBar());
-      list = applyFilter(exp);
+      const list = applyFilter(exp);
       const total = sum(list);
       if (!list.length){
         kids.push(el("div", {class:"empty"}, "この区分の支出はありません"));
@@ -617,21 +762,6 @@ function renderMonth(){
         kids.push(...categoryCards(list));
         kids.push(whoCard(list, total));
         kids.push(breakdownCard("支払方法別", sumBy(list, e => e.method), total, methodLabel));
-      }
-    }
-    // 収入には共有/個人の区分がないので、明細には「すべて」のときだけ入れる
-    const detail = state.filter === "all" ? [...list, ...inc] : list;
-    if (detail.length){
-      kids.push(el("h2", {}, "明細"));
-      const sorted = [...detail].sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
-      let cur = "";
-      for (const e of sorted){
-        if (e.date !== cur){
-          cur = e.date;
-          const dayExp = sum(detail.filter(x => x.date === cur && !isIncome(x)));
-          kids.push(el("div", {class:"day"}, el("span", {}, fmtDayLong(cur)), el("span", {}, dayExp ? yen(dayExp) : "")));
-        }
-        kids.push(entryRow(e, false));
       }
     }
   }
@@ -689,11 +819,12 @@ function renderYear(){
 
 // ================= タブ・更新 =================
 const ICONS = {
-  input: '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 0h10v1H1z M1 11h10v1H1z M0 1h1v10H0z M11 1h1v10h-1z M5 3h2v6H5z M3 5h6v2H3z"/></svg>',
-  month: '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 2h10v1H1z M1 10h10v1H1z M1 3h1v7H1z M10 3h1v7h-1z M1 5h10v1H1z M3 0h1v3H3z M8 0h1v3H8z M3 7h2v2H3z M7 7h2v2H7z"/></svg>',
-  year:  '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 8h2v3H1z M5 5h2v6H5z M9 2h2v9H9z M0 11h12v1H0z"/></svg>'
+  input:  '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 0h10v1H1z M1 11h10v1H1z M0 1h1v10H0z M11 1h1v10h-1z M5 3h2v6H5z M3 5h6v2H3z"/></svg>',
+  month:  '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 2h10v1H1z M1 10h10v1H1z M1 3h1v7H1z M10 3h1v7h-1z M1 5h10v1H1z M3 0h1v3H3z M8 0h1v3H8z M3 7h2v2H3z M7 7h2v2H7z"/></svg>',
+  year:   '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 8h2v3H1z M5 5h2v6H5z M9 2h2v9H9z M0 11h12v1H0z"/></svg>',
+  master: '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 2h2v2H1z M5 2h6v2H5z M1 5h2v2H1z M5 5h6v2H5z M1 8h2v2H1z M5 8h6v2H5z"/></svg>'
 };
-const TAB_LABELS = { input:"入力", month:"月別", year:"年別" };
+const TAB_LABELS = { input:"入力", month:"月別", year:"年別", master:"マスタ" };
 const tabBtns = {};
 for (const k of Object.keys(TAB_LABELS)){
   const b = el("button", {type:"button", onclick: () => setTab(k)});
@@ -715,9 +846,10 @@ function refresh(){
   const y = window.scrollY;
   $("dot").classList.toggle("on", online);
   $("stat").textContent = online ? "同期中" : "接続中…";
-  renderInputDynamic();
+  if (state.tab === "input") renderInput();
   if (state.tab === "month") renderMonth();
   if (state.tab === "year") renderYear();
+  if (state.tab === "master") renderMaster();
   window.scrollTo(0, y);
 }
 
